@@ -1,16 +1,25 @@
-import webbrowser
-import umsgpack
-import numpy as np
-import zmq
 import io
-from PIL import Image        
+import webbrowser
+
+import numpy as np
+import umsgpack
+import zmq
 from IPython.display import HTML
+from PIL import Image
 
-
-from .path import Path
-from .commands import SetObject, SetTransform, Delete, SetProperty, SetAnimation, CaptureImage, SetCamTarget
+from .commands import (
+    CaptureImage,
+    Delete,
+    SetAnimation,
+    SetCamTarget,
+    SetObject,
+    SetProperty,
+    SetTransform,
+)
 from .geometry import MeshPhongMaterial
+from .path import Path
 from .servers.zmqserver import start_zmq_server_as_subprocess
+
 
 class ViewerWindow:
     context = zmq.Context()
@@ -45,9 +54,15 @@ class ViewerWindow:
         response = self.zmq_socket.recv().decode("utf-8")
         return response
 
-    def open(self):
-        webbrowser.open(self.web_url, new=2)
+    def open(self, new=2):
+        webbrowser.open(self.web_url, new=new)
         return self
+
+    def close(self):
+        self.zmq_socket.send(b"close")
+        self.zmq_socket.recv()
+        if self.server_proc is not None:
+            self.server_proc.terminate()
 
     def wait(self):
         self.zmq_socket.send(b"wait")
@@ -100,8 +115,8 @@ class Visualizer:
         vis.path = path
         return vis
 
-    def open(self):
-        self.window.open()
+    def open(self, new=2):
+        self.window.open(new=new)
         return self
 
     def url(self):
@@ -194,8 +209,8 @@ class Visualizer:
 
 
 if __name__ == '__main__':
-    import time
     import sys
+    import time
     args = []
     if len(sys.argv) > 1:
         zmq_url = sys.argv[1]
