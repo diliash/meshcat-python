@@ -2,23 +2,22 @@ from __future__ import absolute_import, division, print_function
 
 import atexit
 import base64
+import json
+import multiprocessing
 import os
 import re
-import sys
 import subprocess
-import multiprocessing
-import json
+import sys
 
-import tornado.web
-import tornado.ioloop
-import tornado.websocket
 import tornado.gen
-
+import tornado.ioloop
+import tornado.web
+import tornado.websocket
 import zmq
 import zmq.eventloop.ioloop
 from zmq.eventloop.zmqstream import ZMQStream
 
-from .tree import SceneTree, walk, find_node
+from .tree import SceneTree, find_node, walk
 
 
 def capture(pattern, s):
@@ -125,21 +124,24 @@ class WebSocketHandler(tornado.websocket.WebSocketHandler):
 
     def open(self):
         self.bridge.websocket_pool.add(self)
-        print("opened:", self, file=sys.stderr)
+        print("opened:", self)
         self.bridge.send_scene(self)
 
     def on_message(self, message):
-        try:
-            message = json.loads(message)
-            self.bridge.send_image(message['data'])
-            return
-        except Exception as err:
-            print(err)
-            raise
+        if message == "ping":
+            self.write_message("pong")
+        else:
+            try:
+                message = json.loads(message)
+                self.bridge.send_image(message['data'])
+                return
+            except Exception as err:
+                print(err)
+                raise
 
     def on_close(self):
         self.bridge.websocket_pool.remove(self)
-        print("closed:", self, file=sys.stderr)
+        print("closed:", self)
 
 
 def create_command(data):
@@ -234,6 +236,19 @@ class ZMQWebSocketBridge(object):
                     raise(Exception("You must install pyngrok (e.g. via `pip install pyngrok`)."))
 
         self.tree = SceneTree()
+        self.ping_response = False
+
+    def send_ping(self):
+        self.ping_response = False
+        for websocket in self.websocket_pool:
+            websocket.write_message("ping")
+
+    def check_pong(self):
+        return self.ping_response
+
+    def handle_pong(self, message):
+        if message == "pong":
+            self.ping_response = True
 
     def make_app(self):
         return tornado.web.Application([
@@ -267,6 +282,9 @@ class ZMQWebSocketBridge(object):
                 self.forward_to_websockets(frames)  # on_message callback should handle the pb
             else:
                 self.ioloop.call_later(0.3, lambda: self.handle_zmq(frames))
+        elif cmd == "check_window":
+            self.send_ping()
+            self.ioloop.call_later(0.5, self.respond_to_check_window)
         elif cmd in MESHCAT_COMMANDS:
             if len(frames) != 3:
                 self.zmq_socket.send(b"error: expected 3 frames")
@@ -311,8 +329,6 @@ class ZMQWebSocketBridge(object):
                 if node.animation is not None:
                     drawing_commands += create_command(node.animation)
 
-            # now that we have the drawing commands, generate the full
-            # HTML that we want to generate, including the javascript assets
             mainminjs_path = os.path.join(VIEWER_ROOT, "main.min.js")
             mainminjs_src = ""
             with open(mainminjs_path, "r") as f:
@@ -333,7 +349,14 @@ class ZMQWebSocketBridge(object):
                             var viewer = new MeshCat.Viewer(document.getElementById("meshcat-pane"));
                             {commands}
                         </script>
-                         <style>
+                        <script>
+                            window.addEventListener('beforeunload', function (e) {
+                                var xhr = new XMLHttpRequest();
+                                xhr.open("POST", "/close", false);
+                                xhr.send(null);
+                            });
+                        </script>
+                        <style>
                             body {{margin: 0; }}
                             #meshcat-pane {{
                                 width: 100vw;
@@ -348,6 +371,12 @@ class ZMQWebSocketBridge(object):
             self.zmq_socket.send(html.encode('utf-8'))
         else:
             self.zmq_socket.send(b"error: unrecognized comand")
+
+    def respond_to_check_window(self):
+        if self.check_pong():
+            self.zmq_socket.send(b"window_open")
+        else:
+            self.zmq_socket.send(b"window_closed")
 
     def forward_to_websockets(self, frames):
         cmd, path, data = frames
@@ -378,10 +407,10 @@ class ZMQWebSocketBridge(object):
 
 def main():
     import argparse
+    import asyncio
+    import platform
     import sys
     import webbrowser
-    import platform
-    import asyncio
 
     # Fix asyncio configuration on Windows for Python 3.8 and above.
     # Workaround for https://github.com/tornadoweb/tornado/issues/2608

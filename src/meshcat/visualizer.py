@@ -1,4 +1,5 @@
 import io
+import time
 import webbrowser
 
 import numpy as np
@@ -28,7 +29,6 @@ class ViewerWindow:
         if start_server:
             self.server_proc, self.zmq_url, self.web_url = start_zmq_server_as_subprocess(
                 zmq_url=zmq_url, server_args=server_args)
-
         else:
             self.server_proc = None
             self.zmq_url = zmq_url
@@ -37,9 +37,6 @@ class ViewerWindow:
 
         if not start_server:
             self.web_url = self.request_web_url()
-            # Not sure why this is necessary, but requesting the web URL before
-            # the websocket connection is made seems to break the receiver
-            # callback in the server until we reconnect.
             self.connect_zmq()
 
         print("You can open the visualizer by visiting the following URL:")
@@ -55,19 +52,33 @@ class ViewerWindow:
         return response
 
     def open(self, new=2):
-        autoraise=True
+        autoraise = True
         if new == 0:
-            autoraise=False
+            autoraise = False
         webbrowser.open(self.web_url, new=new, autoraise=autoraise)
         return self
 
-    def close(self):
-        self.zmq_socket.send(b"close")
-        self.zmq_socket.recv()
-        self.zmq_socket.close()
-        if self.server_proc is not None:
-            self.server_proc.terminate()
-            self.server_proc.wait()
+    def open_with_listener(self, new=2, dummy=True):
+        autoraise = True
+        if new == 0:
+            autoraise = False
+        webbrowser.open(self.web_url, new=new, autoraise=autoraise)
+        if not dummy:
+            while True:
+                self.zmq_socket.send(b"check_window")
+                time.sleep(1)
+                message = self.zmq_socket.recv().decode("utf-8")
+                if message == "window_closed":
+                    print("Browser window was closed")
+                    break
+                time.sleep(1)  # Add a delay to avoid spamming the server with requests
+        else:
+            # Just wait for keyboard interrupt
+            try:
+                while True:
+                    time.sleep(1)
+            except KeyboardInterrupt:
+                pass
 
     def wait(self):
         self.zmq_socket.send(b"wait")
@@ -82,12 +93,6 @@ class ViewerWindow:
         ])
         self.zmq_socket.recv()
 
-    def get_scene(self):
-        """Get the static HTML from the ZMQ server."""
-        self.zmq_socket.send(b"get_scene")
-        # we receive the HTML as utf-8-encoded, so decode here
-        return self.zmq_socket.recv().decode('utf-8')
-
     def get_image(self, w, h):
         cmd_data = CaptureImage(w, h).lower()
         self.zmq_socket.send_multipart([
@@ -99,10 +104,13 @@ class ViewerWindow:
         img = Image.open(io.BytesIO(img_bytes))
         return img
 
+    def terminate(self):
+        if self.server_proc:
+            self.server_proc.terminate()
+            self.server_proc.wait()
 
 def srcdoc_escape(x):
     return x.replace("&", "&amp;").replace('"', "&quot;")
-
 
 class Visualizer:
     __slots__ = ["window", "path"]
@@ -124,22 +132,17 @@ class Visualizer:
         self.window.open(new=new)
         return self
 
+    def open_with_listener(self, new=2, dummy=True):
+        self.window.open_with_listener(new=new, dummy=dummy)
+        return self
+
     def url(self):
         return self.window.web_url
 
     def wait(self):
-        """
-        Block until a browser is connected to the server
-        """
         return self.window.wait()
 
     def jupyter_cell(self, height=400):
-        """
-        Render the visualizer in a jupyter notebook or jupyterlab cell.
-
-        For this to work, it should be the very last command in the given jupyter
-        cell.
-        """
         return HTML("""
             <div style="height: {height}px; width: 100%; overflow-x: auto; overflow-y: hidden; resize: both">
             <iframe src="{url}" style="width: 100%; height: 100%; border: none"></iframe>
@@ -147,15 +150,6 @@ class Visualizer:
             """.format(url=self.url(), height=height))
 
     def render_static(self, height=400):
-        """
-        Render a static snapshot of the visualizer in a jupyter notebook or
-        jupyterlab cell. The resulting snapshot of the visualizer will still be an
-        interactive 3D scene, but it won't be affected by any future `set_transform`
-        or `set_object` calls.
-
-        Note: this method should work well even when your jupyter kernel is running
-        on a different machine or inside a container.
-        """
         return HTML("""
         <div style="height: {height}px; width: 100%; overflow-x: auto; overflow-y: hidden; resize: both">
         <iframe srcdoc="{srcdoc}" style="width: 100%; height: 100%; border: none"></iframe>
@@ -178,40 +172,30 @@ class Visualizer:
         return self.window.send(SetAnimation(animation, play=play, repetitions=repetitions))
 
     def set_cam_target(self, value):
-        """Set camera target (in right-handed coordinates (x,y,z))."""
         v = list(value)
-        v[1], v[2] = v[2], -v[1]  # convert to left-handed (x,z,-y)
+        v[1], v[2] = v[2], -v[1]
         return self.window.send(SetCamTarget(v))
 
     def set_cam_pos(self, value):
-        """Set camera position (in right-handed coordinates (x,y,z))."""
         path = "/Cameras/default/rotated/<object>"
         v = list(value)
-        v[1], v[2] = v[2], -v[1]  # convert to left-handed (x,z,-y)
+        v[1], v[2] = v[2], -v[1]
         return self[path].set_property("position", v)
 
     def get_image(self, w=None, h=None):
-        """Save an image"""
         return self.window.get_image(w, h)
 
     def delete(self):
         return self.window.send(Delete(self.path))
 
-    def close(self):
-        self.window.close()
+    def terminate(self):
+        self.window.terminate()
 
     def static_html(self):
-        """
-        Generate and save a static HTML file that standalone encompasses the visualizer and contents.
-
-        Ask the server for the scene (since the server knows it), and pack it all into an
-        HTML blob for future use.
-        """
         return self.window.get_scene()
 
     def __repr__(self):
         return "<Visualizer using: {window} at path: {path}>".format(window=self.window, path=self.path)
-
 
 if __name__ == '__main__':
     import sys
@@ -228,4 +212,3 @@ if __name__ == '__main__':
 
     while True:
         time.sleep(100)
-
