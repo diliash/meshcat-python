@@ -64,8 +64,10 @@ class ViewerWindow:
     def close(self):
         self.zmq_socket.send(b"close")
         self.zmq_socket.recv()
+        self.zmq_socket.close()
         if self.server_proc is not None:
             self.server_proc.terminate()
+            self.server_proc.wait()
 
     def wait(self):
         self.zmq_socket.send(b"wait")
