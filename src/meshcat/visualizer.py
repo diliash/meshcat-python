@@ -55,7 +55,10 @@ class ViewerWindow:
         return response
 
     def open(self, new=2):
-        webbrowser.open(self.web_url, new=new)
+        autoraise=True
+        if new == 0:
+            autoraise=False
+        webbrowser.open(self.web_url, new=new, autoraise=autoraise)
         return self
 
     def close(self):
