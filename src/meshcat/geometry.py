@@ -1,8 +1,9 @@
 import base64
 import uuid
-from io import StringIO, BytesIO
-import umsgpack
+from io import BytesIO, StringIO
+
 import numpy as np
+import umsgpack
 
 from . import transformations as tf
 
@@ -516,22 +517,17 @@ class TriangularMeshGeometry(Geometry):
     """
     __slots__ = ["vertices", "faces"]
 
-    def __init__(self, vertices, faces, color=None):
+    def __init__(self, vertices, faces, uvs=None, color=None):
         super(TriangularMeshGeometry, self).__init__()
-
-        vertices = np.asarray(vertices, dtype=np.float32)
-        faces = np.asarray(faces, dtype=np.uint32)
-        assert vertices.shape[1] == 3, "`vertices` must be an Nx3 array"
-        assert faces.shape[1] == 3, "`faces` must be an Mx3 array"
-        self.vertices = vertices
-        self.faces = faces
-        if color is not None:
-            color = np.asarray(color, dtype=np.float32)
-            assert np.array_equal(vertices.shape, color.shape), "`color` must be the same shape as vertices"
-        self.color = color
+        self.vertices = np.asarray(vertices, dtype=np.float32)
+        self.faces = np.asarray(faces, dtype=np.uint32)
+        self.uvs = np.asarray(uvs, dtype=np.float32) if uvs is not None else None
+        self.color = np.asarray(color, dtype=np.float32) if color is not None else None
 
     def lower(self, object_data):
         attrs = {u"position": pack_numpy_array(self.vertices.T)}
+        if self.uvs is not None:
+            attrs[u"uv"] = pack_numpy_array(self.uvs.T)
         if self.color is not None:
             attrs[u"color"] = pack_numpy_array(self.color.T)
         return {
