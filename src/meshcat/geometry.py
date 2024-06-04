@@ -269,10 +269,11 @@ class ImageTexture(Texture):
 
 
 class Object(SceneElement):
-    def __init__(self, geometry, material=MeshPhongMaterial()):
+    def __init__(self, geometry, material=MeshPhongMaterial(), renderOrder=0):
         super(Object, self).__init__()
         self.geometry = geometry
         self.material = material
+        self.renderOrder = renderOrder
 
     def lower(self):
         data = {
@@ -287,7 +288,8 @@ class Object(SceneElement):
                 u"type": self._type,
                 u"geometry": self.geometry.uuid,
                 u"material": self.material.uuid,
-                u"matrix": list(self.geometry.intrinsic_transform().flatten())
+                u"matrix": list(self.geometry.intrinsic_transform().flatten()),
+                u"renderOrder": self.renderOrder
             }
         }
         self.geometry.lower_in_object(data)
@@ -491,9 +493,10 @@ class StlMeshGeometry(MeshGeometry):
 class TriangularMeshGeometry(Geometry):
     """
     A mesh consisting of an arbitrary collection of triangular faces. To
-    construct one, you need to pass in a collection of vertices as an Nx3 array
-    and a collection of faces as an Mx3 array. Each element of `faces` should
-    be a collection of 3 indices into the `vertices` array.
+    construct one, you need to pass in a collection of vertices as an Nx3 array,
+    a collection of faces as an Mx3 array, and optionally a collection of normals
+    as an Nx3 array. Each element of `faces` should be a collection of 3 indices
+    into the `vertices` array.
 
     For example, to create a square made out of two adjacent triangles, we
     could do:
@@ -508,24 +511,33 @@ class TriangularMeshGeometry(Geometry):
         [0, 1, 2],  # The first face consists of vertices 0, 1, and 2
         [3, 0, 2]
     ])
+    normals = np.array([
+        [0, 1, 0],  # Normal for the first vertex
+        [0, 1, 0],
+        [0, 1, 0],
+        [0, 1, 0]
+    ])
 
-    mesh = TriangularMeshGeometry(vertices, faces)
+    mesh = TriangularMeshGeometry(vertices, faces, normals=normals)
 
     To set the color of the mesh by vertex, pass an Nx3 array containing the
     RGB values (in range [0,1]) of the vertices to the optional `color`
     argument, and set `vertexColors=True` in the Material.
     """
-    __slots__ = ["vertices", "faces"]
+    __slots__ = ["vertices", "faces", "normals", "uvs", "color"]
 
-    def __init__(self, vertices, faces, uvs=None, color=None):
+    def __init__(self, vertices, faces, normals=None, uvs=None, color=None):
         super(TriangularMeshGeometry, self).__init__()
         self.vertices = np.asarray(vertices, dtype=np.float32)
         self.faces = np.asarray(faces, dtype=np.uint32)
+        self.normals = np.asarray(normals, dtype=np.float32) if normals is not None else None
         self.uvs = np.asarray(uvs, dtype=np.float32) if uvs is not None else None
         self.color = np.asarray(color, dtype=np.float32) if color is not None else None
 
     def lower(self, object_data):
         attrs = {u"position": pack_numpy_array(self.vertices.T)}
+        if self.normals is not None:
+            attrs[u"normal"] = pack_numpy_array(self.normals.T)
         if self.uvs is not None:
             attrs[u"uv"] = pack_numpy_array(self.uvs.T)
         if self.color is not None:
